@@ -1,0 +1,110 @@
+&gpio0 {
+    status = "okay";
+};
+
+&gpio1 {
+    status = "okay";
+};
+
+&gpio2 {
+    status = "okay";
+};
+
+/* Bật lại UART để xem log và mã OOB provisioning */
+&uart20 {
+    status = "okay";
+};
+
+&i2c21 {
+    compatible = "nordic,nrf-twim";
+    status = "okay";
+    clock-frequency = <I2C_BITRATE_STANDARD>; /* 100kHz */
+    pinctrl-0 = <&i2c21_default>;
+    pinctrl-1 = <&i2c21_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    mysensor: mysensor@55{
+        compatible = "i2c-device";
+        reg = <0x55>;
+        label = "MYSENSOR";
+    };
+};
+
+&pinctrl {
+    i2c21_default: i2c21_default {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 11)>, <NRF_PSEL(TWIM_SDA, 1, 12)>;
+            bias-pull-up;
+        };
+    };
+    
+    i2c21_sleep: i2c21_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 11)>, <NRF_PSEL(TWIM_SDA, 1, 12)>;
+            low-power-enable;
+        };
+    };
+};
+
+/ {
+    leds {
+        compatible = "gpio-leds";
+        led0: led_0 {
+            gpios = <&gpio2 9 GPIO_ACTIVE_LOW>;
+            label = "Green LED 0";
+        };
+        led1: led_1 {
+            gpios = <&gpio2 10 GPIO_ACTIVE_LOW>;
+            label = "Green LED 1";
+        };
+        led2: led_2 {
+            gpios = <&gpio2 7 GPIO_ACTIVE_LOW>;
+            label = "Green LED 2";
+        };
+        led3: led_3 {
+            gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
+            label = "Green LED 3";
+        };
+    };
+
+    buttons {
+        compatible = "gpio-keys";
+        button0: button_0 {
+            gpios = <&gpio1 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Push button switch 0";
+            zephyr,code = <INPUT_KEY_0>;
+        };
+        button1: button_1 {
+            gpios = <&gpio1 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Push button switch 1";
+            zephyr,code = <INPUT_KEY_1>;
+        };
+        /* Đã thêm lại button2 và button3 vào đúng vị trí để tránh lỗi cú pháp */
+        button2: button_2 {
+            gpios = <&gpio1 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; /* LƯU Ý: Đổi số '6' thành chân GPIO thực tế trên mạch của bạn */
+            label = "Push button switch 2";
+            zephyr,code = <INPUT_KEY_2>;
+        };
+        button3: button_3 {
+            gpios = <&gpio1 7 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; /* LƯU Ý: Đổi số '7' thành chân GPIO thực tế trên mạch của bạn */
+            label = "Push button switch 3";
+            zephyr,code = <INPUT_KEY_3>;
+        };
+    };
+
+    aliases {
+        led0 = &led0;
+        led1 = &led1;
+        led2 = &led2;
+        led3 = &led3;
+        sw0 = &button0;
+        sw1 = &button1;
+        sw2 = &button2; /* Thêm alias cho switch 2 */
+        sw3 = &button3; /* Thêm alias cho switch 3 */
+        i2c-0 = &i2c21;
+    };
+};
+
+&gpiote30 {
+    status = "okay";
+};

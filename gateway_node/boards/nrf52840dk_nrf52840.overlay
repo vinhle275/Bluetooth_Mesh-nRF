@@ -1,0 +1,219 @@
+#include <zephyr/dt-bindings/adc/nrf-saadc.h>
+
+/* Device Tree Overlay cho bo mạch nRF52840 Temperature Logger
+ * Dựa trên sơ đồ phần cứng: ph_nRF52840_temperature_logger_hw.kicad_sch
+ */
+
+/ {
+    aliases {
+        led0 = &led0;
+        led1 = &led1;
+        sw0 = &button0;
+        sw1 = &button1;
+    };
+
+    chosen {
+        zephyr,entropy = &rng;
+    };
+
+    /* --- KHỐI USER LEDS --- */
+    /* LED D8 và D9 kết nối lên +3V3, kích sáng ở mức Thấp (Active Low) */
+    leds {
+        compatible = "gpio-leds";
+        led0: led_0 {
+            gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
+            label = "User LED D8";
+        };
+        led1: led_1 {
+            gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;
+            label = "User LED D9";
+        };
+    };
+
+    /* --- KHỐI IP5306 KEY --- */
+    ip5306_pins {
+        compatible = "gpio-leds";
+        ip5306_key: ip5306_key_pin {
+            gpios = <&gpio0 28 GPIO_ACTIVE_HIGH>;
+            label = "IP5306 Key Pin";
+        };
+    };
+
+    /* --- KHỐI USER BUTTONS --- */
+    /* Nút SW1 và SW2 kết nối xuống GND, cần kéo lên (Pull-Up) và kích mức Thấp */
+    buttons {
+        compatible = "gpio-keys";
+        button0: button_0 {
+            gpios = <&gpio0 3 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "User Button SW1";
+            zephyr,code = <INPUT_KEY_0>;
+        };
+        button1: button_1 {
+            gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "User Button SW2";
+            zephyr,code = <INPUT_KEY_1>;
+        };
+    };
+};
+
+/* --- CẤU HÌNH PINCTRL CHO CÁC CHUẨN GIAO TIẾP --- */
+&pinctrl {
+    /* Cấu hình chân cho I2C0 (OLED) */
+    i2c0_default: i2c0_default {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 9)>,
+                    <NRF_PSEL(TWIM_SDA, 0, 26)>;
+            bias-pull-up;
+        };
+    };
+    i2c0_sleep: i2c0_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 9)>,
+                    <NRF_PSEL(TWIM_SDA, 0, 26)>;
+            low-power-enable;
+        };
+    };
+
+    /* Cấu hình chân cho I2C1 (SHT3x) */
+    i2c1_default: i2c1_default {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 0)>,
+                    <NRF_PSEL(TWIM_SDA, 1, 2)>;
+            bias-pull-up;
+        };
+    };
+    i2c1_sleep: i2c1_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SCL, 1, 0)>,
+                    <NRF_PSEL(TWIM_SDA, 1, 2)>;
+            low-power-enable;
+        };
+    };
+
+    /* Cấu hình chân cho SPI (MAX31865 / PT100) */
+    spi2_default: spi2_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 24)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 20)>;
+        };
+    };
+    spi2_sleep: spi2_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 24)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 20)>;
+            low-power-enable;
+        };
+    };
+    /* Cấu hình chân cho UART (RS485) */
+    uart0_default: uart0_default {
+        group1 {
+            psels = <NRF_PSEL(UART_TX, 0, 30)>,
+                    <NRF_PSEL(UART_RX, 0, 31)>;
+        };
+    };
+    uart0_sleep: uart0_sleep {
+        group1 {
+            psels = <NRF_PSEL(UART_TX, 0, 30)>,
+                    <NRF_PSEL(UART_RX, 0, 31)>;
+            low-power-enable;
+        };
+    };
+};
+
+/* --- KHỐI GIAO TIẾP I2C0: MÀN HÌNH OLED SSD1306 --- */
+&i2c0 {
+    compatible = "nordic,nrf-twim";
+    status = "okay";
+    pinctrl-0 = <&i2c0_default>;
+    pinctrl-1 = <&i2c0_sleep>;
+    pinctrl-names = "default", "sleep";
+    clock-frequency = <I2C_BITRATE_FAST>; /* 400kHz */
+
+    /* Màn hình OLED SSD1306 (128x64) */
+    ssd1306: ssd1306@3c {
+        compatible = "solomon,ssd1306fb";
+        reg = <0x3c>;
+        width = <128>;
+        height = <64>;
+        segment-offset = <0>;
+        page-offset = <0>;
+        display-offset = <0>;
+        multiplex-ratio = <63>;
+        prechargep = <0x22>;
+    };
+};
+
+/* --- KHỐI GIAO TIẾP I2C1: CẢM BIẾN SHT3X --- */
+&i2c1 {
+    compatible = "nordic,nrf-twim";
+    status = "okay";
+    pinctrl-0 = <&i2c1_default>;
+    pinctrl-1 = <&i2c1_sleep>;
+    pinctrl-names = "default", "sleep";
+    clock-frequency = <I2C_BITRATE_FAST>; /* 400kHz */
+
+    /* Cảm biến SHT3x */
+    sht3x: sht3x@44 {
+        compatible = "sensirion,sht3xd";
+        reg = <0x44>;
+    };
+};
+
+/* --- KHỐI GIAO TIẾP SPI: MAX31865 (CẢM BIẾN PT100) --- */
+&spi2 {
+    compatible = "nordic,nrf-spim";
+    status = "okay";
+    pinctrl-0 = <&spi2_default>;
+    pinctrl-1 = <&spi2_sleep>;
+    pinctrl-names = "default", "sleep";
+
+    /* Chân Chip Select (CS) */
+    cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+
+    max31865: max31865@0 {
+        compatible = "maxim,max31865";
+        reg = <0>;
+        spi-max-frequency = <1000000>;
+        spi-cpha;
+        resistance-at-zero = <100>;
+        resistance-reference = <400>;
+    };
+};
+
+/* Disable spi1 which is enabled by default on nrf52840dk to avoid conflict with i2c1 */
+&spi1 {
+    status = "disabled";
+};
+
+/* --- KHỐI GIAO TIẾP UART: RS485 INTERFACE --- */
+&uart0 {
+    compatible = "nordic,nrf-uarte";
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-1 = <&uart0_sleep>;
+    pinctrl-names = "default", "sleep";
+};
+
+/ {
+	zephyr,user {
+		io-channels = <&adc 0>;
+	};
+};
+
+&adc {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_VDD>;
+		zephyr,resolution = <12>;
+	};
+};
