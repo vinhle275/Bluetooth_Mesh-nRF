@@ -19,6 +19,8 @@ extern "C" {
 #endif
 
 const struct bt_mesh_comp *model_handler_init(void);
+void check_and_self_provision(void);
+
 
 #ifdef __cplusplus
 }

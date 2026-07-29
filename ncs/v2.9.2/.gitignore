@@ -1,0 +1,4 @@
+*.swp
+*~
+bootloader*/
+modules*/

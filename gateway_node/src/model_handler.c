@@ -4,214 +4,343 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
+/*
+ * GATEWAY NODE - Gradient Routing Hub
+ * ====================================
+ * - Luon bat (khong co chu ky ngu/thuc)
+ * - Khoi xuong GRADIENT_DISCOVER de xay dung bang dinh tuyen
+ * - Nhan SENSOR_DATA tu tat ca cac node va hien thi
+ * - Nhan GRADIENT_REPLY de biet trang thai cac node
+ * - Tu dong tai kham pha gradient moi 200s (~10 chu ky leaf)
+ */
+
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/mesh.h>
 #include <zephyr/bluetooth/mesh/main.h>
+#include <stdlib.h>
 #include <bluetooth/mesh/models.h>
 #include <dk_buttons_and_leds.h>
 #include "model_handler.h"
+
 #include <zephyr/logging/log.h>
-#include <zephyr/net_buf.h> 
+#include <zephyr/net_buf.h>
 
 extern uint16_t bt_mesh_primary_addr(void);
 
 LOG_MODULE_REGISTER(model_handler, CONFIG_LOG_DEFAULT_LEVEL);
 
+#define ELEMENTS_SIZE (DT_NODE_EXISTS(DT_ALIAS(led0)) + DT_NODE_EXISTS(DT_ALIAS(led1)))
+static struct bt_mesh_elem *p_elements;
+
 /* ========================================================================= */
-/* --- PHẦN THÊM MỚI: ĐỊNH NGHĨA VÀ XỬ LÝ VENDOR MODEL NHẬN SỐ NGUYÊN 32-BIT --- */
-#define VND_COMPANY_ID   0x0059   // Mã công ty Nordic
-#define VND_MODEL_ID_SRV 0x0002   // ID Model Nhận
-#define VND_OP_SENSOR_DATA BT_MESH_MODEL_OP_3(0x01, VND_COMPANY_ID)
-#define VND_OP_RREQ        BT_MESH_MODEL_OP_3(0x0A, VND_COMPANY_ID)
-#define VND_OP_RREP        BT_MESH_MODEL_OP_3(0x0B, VND_COMPANY_ID)
+/* --- DINH NGHIA VENDOR MODEL VA OPCODE ---                                 */
+/* ========================================================================= */
+#define BT_MESH_MODEL_ID_SENSOR_CLI 0x1102
+#define SENSOR_OP_STATUS            0x52
 
-#define MAX_SENSORS 10
+#define PROP_ID_SUBNET_REPORT       0xEEEE
+
+struct subnet_report_val_t {
+	uint16_t origin;
+	int16_t  sensor_value;
+	uint8_t  battery_level;
+} __packed;
+
+struct gradient_discover_msg_t {
+	uint16_t origin;       /* Dia chi gateway goc */
+	uint8_t  hop_count;    /* So hop tu gateway */
+	uint16_t energy_cost;  /* Tong chi phi nang luong tich luy */
+	uint8_t  sequence;     /* So thu tu de tranh xu ly goi cu */
+} __packed;
+
+struct gradient_reply_msg_t {
+	uint16_t origin;       /* Dia chi node gui reply */
+	uint8_t  battery_level;
+	uint8_t  hop_count;    /* Khoang cach den gateway */
+} __packed;
+
+/* ========================================================================= */
+/* --- DANH SACH SENSOR NODE ---                                             */
+/* ========================================================================= */
+#define MAX_SENSORS 256
+
 struct sensor_node_t {
-    uint16_t addr;
-    uint32_t value; 
-    bool is_active;
+	uint16_t addr;
+	int32_t  value;
+	uint8_t  battery;
+	bool     is_active;
 };
+
 static struct sensor_node_t sensor_list[MAX_SENSORS];
+static uint32_t total_rx_count;
+static uint32_t unique_rx_count;
+static uint32_t current_cycle_rx_count;
+static uint8_t current_cycle_seq;
 
-struct rreq_msg_t {
-	uint16_t origin;
-	uint8_t seq;
-	uint8_t hop_count;
-} __packed;
-
-struct rrep_msg_t {
-	uint16_t origin;
-	uint16_t gateway;
-	uint16_t next_hop;
-	uint8_t hop_count;
-} __packed;
-
-struct sensor_data_msg_t {
-	uint16_t origin;
-	uint16_t next_hop;
-	uint32_t sensor_value;
-} __packed;
-
-/* Hàm in danh sách ra Segger RTT */
-static void update_and_print_sensor_list(uint16_t sender_addr, uint32_t sensor_value)
+static void update_and_print_sensor_list(uint16_t sender_addr, int32_t sensor_value, uint8_t battery_level)
 {
-    bool found = false;
-    for (int i = 0; i < MAX_SENSORS; i++) {
-        if (sensor_list[i].is_active && sensor_list[i].addr == sender_addr) {
-            sensor_list[i].value = sensor_value;
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        for (int i = 0; i < MAX_SENSORS; i++) {
-            if (!sensor_list[i].is_active) {
-                sensor_list[i].addr = sender_addr;
-                sensor_list[i].value = sensor_value;
-                sensor_list[i].is_active = true;
-                break;
-            }
-        }
-    }
-
-    LOG_INF("\n========================================");
-    LOG_INF("      DANH SACH DU LIEU SENSOR HUB      ");
-    LOG_INF("========================================");
-    LOG_INF("|   DIA CHI NODE    |  GIA TRI SENSOR  |");
-    LOG_INF("----------------------------------------");
-    for (int i = 0; i < MAX_SENSORS; i++) {
-        if (sensor_list[i].is_active) {
-            LOG_INF("|      0x%04X       |    %10u    |", 
-                    sensor_list[i].addr, sensor_list[i].value);
-        }
-    }
-    LOG_INF("========================================\n");
-}
-
-/* Callback xử lý khi có gói tin Vendor bay tới */
-static int handle_sensor_data(const struct bt_mesh_model *model,
-			      struct bt_mesh_msg_ctx *ctx,
-			      struct net_buf_simple *buf)
-{
-	if (buf->len < sizeof(struct sensor_data_msg_t)) {
-		return -EINVAL;
-	}
-	uint16_t origin = net_buf_simple_pull_le16(buf);
-	uint16_t next_hop = net_buf_simple_pull_le16(buf);
-	uint32_t sensor_value = net_buf_simple_pull_le32(buf); // Lấy số 32-bit từ payload
-
-	uint16_t my_addr = bt_mesh_primary_addr();
-	if (next_hop != my_addr) {
-		// Not for us
-		return 0;
-	}
-
-	update_and_print_sensor_list(origin, sensor_value);
-	return 0;
-}
-
-struct rreq_record_t {
-	uint16_t origin;
-	uint8_t seq;
-	uint8_t best_hop;
-	bool active;
-};
-#define MAX_RREQ_RECORDS 10
-static struct rreq_record_t rreq_records[MAX_RREQ_RECORDS];
-
-static int handle_rreq(const struct bt_mesh_model *model,
-		       struct bt_mesh_msg_ctx *ctx,
-		       struct net_buf_simple *buf)
-{
-	if (buf->len < sizeof(struct rreq_msg_t)) {
-		return -EINVAL;
-	}
-	uint16_t origin = net_buf_simple_pull_le16(buf);
-	uint8_t seq = net_buf_simple_pull_u8(buf);
-	uint8_t hop_count = net_buf_simple_pull_u8(buf);
-
-	// Check if we have an existing record for this origin
-	int record_idx = -1;
-	int empty_idx = -1;
-	for (int i = 0; i < MAX_RREQ_RECORDS; i++) {
-		if (rreq_records[i].active && rreq_records[i].origin == origin) {
-			record_idx = i;
+	bool found = false;
+	for (int i = 0; i < MAX_SENSORS; i++) {
+		if (sensor_list[i].is_active && sensor_list[i].addr == sender_addr) {
+			sensor_list[i].value = sensor_value;
+			sensor_list[i].battery = battery_level;
+			found = true;
 			break;
 		}
-		if (!rreq_records[i].active && empty_idx == -1) {
-			empty_idx = i;
+	}
+	if (!found) {
+		for (int i = 0; i < MAX_SENSORS; i++) {
+			if (!sensor_list[i].is_active) {
+				sensor_list[i].addr = sender_addr;
+				sensor_list[i].value = sensor_value;
+				sensor_list[i].battery = battery_level;
+				sensor_list[i].is_active = true;
+				break;
+			}
 		}
 	}
 
-	bool should_reply = false;
-	if (record_idx == -1) {
-		// New origin node
-		int idx = (empty_idx != -1) ? empty_idx : 0;
-		rreq_records[idx].origin = origin;
-		rreq_records[idx].seq = seq;
-		rreq_records[idx].best_hop = hop_count;
-		rreq_records[idx].active = true;
-		should_reply = true;
-	} else {
-		// Existing origin node
-		// If it's a new path discovery round (seq is larger)
-		if (seq > rreq_records[record_idx].seq) {
-			rreq_records[record_idx].seq = seq;
-			rreq_records[record_idx].best_hop = hop_count;
-			should_reply = true;
-		} 
-		// If it's the same round, but with a strictly fewer number of hops
-		else if (seq == rreq_records[record_idx].seq && hop_count < rreq_records[record_idx].best_hop) {
-			rreq_records[record_idx].best_hop = hop_count;
-			should_reply = true;
+	total_rx_count++;
+	current_cycle_rx_count++;
+	if (!found) {
+		unique_rx_count++;
+	}
+
+	if ((total_rx_count % 25U) == 0U) {
+		LOG_INF("GW_SUMMARY total_rx=%u unique_rx=%u cycle_rx=%u",
+			total_rx_count, unique_rx_count, current_cycle_rx_count);
+	}
+}
+
+/* ========================================================================= */
+/* --- GRADIENT DISCOVERY STATE ---                                          */
+/* ========================================================================= */
+static uint8_t gradient_sequence = 0;
+static const struct bt_mesh_model *vnd_srv_model;
+
+static struct k_work_delayable gradient_discover_work;
+static struct k_work_delayable gradient_rediscover_work;
+static struct k_work_delayable init_subscription_work;
+static int discover_burst_count = 0;
+
+#define GRADIENT_DISCOVER_BURST_COUNT      5
+#define GRADIENT_DISCOVER_BURST_INTERVAL   3000   /* ms giua moi lan gui trong 1 burst */
+#define GRADIENT_REDISCOVER_INTERVAL       200000 /* ms ~ 10 chu ky leaf (10s thuc + 10s ngu) */
+
+/* ========================================================================= */
+/* --- FORWARD DECLARATIONS ---                                              */
+/* ========================================================================= */
+#define VND_COMPANY_ID            0x0059
+#define VND_MODEL_ID_SRV          0x0002
+#define VND_OP_GRADIENT_DISCOVER  BT_MESH_MODEL_OP_3(0x02, VND_COMPANY_ID)
+#define VND_OP_GRADIENT_REPLY     BT_MESH_MODEL_OP_3(0x03, VND_COMPANY_ID)
+
+static int handle_sensor_status(const struct bt_mesh_model *model,
+				struct bt_mesh_msg_ctx *ctx,
+				struct net_buf_simple *buf);
+
+static const struct bt_mesh_model *sensor_cli_model;
+
+/* ========================================================================= */
+/* --- MODEL OP ARRAYS ---                                                  */
+/* ========================================================================= */
+BT_MESH_MODEL_PUB_DEFINE(vnd_pub, NULL, 15);
+BT_MESH_MODEL_PUB_DEFINE(sensor_cli_pub, NULL, 15);
+
+static const struct bt_mesh_model_op vnd_srv_ops[] = {
+	BT_MESH_MODEL_OP_END,
+};
+
+static const struct bt_mesh_model_op sensor_cli_ops[] = {
+	{ SENSOR_OP_STATUS, 3, handle_sensor_status },
+	BT_MESH_MODEL_OP_END,
+};
+
+/* ========================================================================= */
+/* --- HAM GUI GRADIENT DISCOVER ---                                         */
+/* ========================================================================= */
+static void send_gradient_discover(void)
+{
+	if (!vnd_srv_model) {
+		return;
+	}
+
+	/* Tim AppKey da bind */
+	uint16_t app_idx = BT_MESH_KEY_UNUSED;
+	for (int i = 0; i < CONFIG_BT_MESH_MODEL_KEY_COUNT; i++) {
+		if (vnd_srv_model->keys[i] != BT_MESH_KEY_UNUSED) {
+			app_idx = vnd_srv_model->keys[i];
+			break;
 		}
 	}
-
-	if (!should_reply) {
-		LOG_INF("--- [GATEWAY RREQ]: Bo qua RREQ tu 0x%04X vi da co duong truyen ngan hon den 0x%04X ---", 
-				ctx->addr, origin);
-		return 0;
+	if (app_idx == BT_MESH_KEY_UNUSED) {
+		LOG_WRN("--- [GRADIENT]: Chua co AppKey, bo qua discover ---");
+		return;
 	}
 
-	LOG_INF("--- [GATEWAY RREQ RECV]: Chap nhan RREQ tu 0x%04X: origin=0x%04X, seq=%u, hop=%u ---", 
-			ctx->addr, origin, seq, hop_count);
+	/* Lay group address tu publish address (cau hinh boi provisioner) */
+	uint16_t group_addr = BT_MESH_ADDR_UNASSIGNED;
+	if (vnd_srv_model->pub && vnd_srv_model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
+		group_addr = vnd_srv_model->pub->addr;
+	}
+	if (group_addr == BT_MESH_ADDR_UNASSIGNED) {
+		/* Fallback: doc tu subscription list */
+		for (int i = 0; i < CONFIG_BT_MESH_MODEL_GROUP_COUNT; i++) {
+			if (vnd_srv_model->groups[i] != BT_MESH_ADDR_UNASSIGNED) {
+				group_addr = vnd_srv_model->groups[i];
+				break;
+			}
+		}
+	}
+	if (group_addr == BT_MESH_ADDR_UNASSIGNED) {
+		LOG_WRN("--- [GRADIENT]: Chua co group address, bo qua discover ---");
+		return;
+	}
 
-	// Gateway responds immediately with RREP back to the neighbor that forwarded the RREQ
-	struct net_buf_simple *msg = NET_BUF_SIMPLE(15);
-	net_buf_simple_init(msg, 0);
-	
-	bt_mesh_model_msg_init(msg, VND_OP_RREP);
-	net_buf_simple_add_le16(msg, origin);
-	net_buf_simple_add_le16(msg, bt_mesh_primary_addr()); // Gateway address
-	net_buf_simple_add_le16(msg, ctx->addr);             // next_hop (the neighbor)
-	net_buf_simple_add_u8(msg, hop_count);
+	/* Tao goi GRADIENT_DISCOVER */
+	uint8_t msg_data[16];
+	struct net_buf_simple msg;
+	net_buf_simple_init_with_data(&msg, msg_data, sizeof(msg_data));
+	bt_mesh_model_msg_init(&msg, VND_OP_GRADIENT_DISCOVER);
+	net_buf_simple_add_le16(&msg, bt_mesh_primary_addr()); /* origin = gateway */
+	net_buf_simple_add_u8(&msg, 0);                        /* hop_count = 0 */
+	net_buf_simple_add_le16(&msg, 0);                      /* energy_cost = 0 */
+	net_buf_simple_add_u8(&msg, gradient_sequence);        /* sequence */
 
-	struct bt_mesh_msg_ctx reply_ctx = {
-		.net_idx = ctx->net_idx,
-		.app_idx = ctx->app_idx,
-		.addr = ctx->addr, // send back unicast to the forwarding neighbor
-		.send_ttl = BT_MESH_TTL_DEFAULT,
+	/* Gui voi TTL=0 de chi node trong tam nhan truc tiep nhan duoc */
+	struct bt_mesh_msg_ctx ctx = {
+		.addr     = group_addr,
+		.net_idx  = app_idx, /* Gia dinh net_idx == app_idx */
+		.app_idx  = app_idx,
+		.send_ttl = 0,       /* Khong relay - chi direct neighbors */
 	};
 
-	int err = bt_mesh_model_send(model, &reply_ctx, msg, NULL, NULL);
+	int err = bt_mesh_model_send(vnd_srv_model, &ctx, &msg, NULL, NULL);
 	if (err) {
-		LOG_ERR("Loi gui RREP (err %d)", err);
+		LOG_ERR("--- [GRADIENT]: Loi gui discover (err %d) ---", err);
 	} else {
-		LOG_INF("--- [GATEWAY RREP SEND]: Da gui RREP ve 0x%04X: origin=0x%04X, next_hop=0x%04X, hop=%u ---", 
-				ctx->addr, origin, ctx->addr, hop_count);
+		LOG_INF("--- [GRADIENT]: Broadcast DISCOVER seq=%u hop=0 cost=0 -> 0x%04X (net=%u, app=%u) ---",
+			gradient_sequence, group_addr, app_idx, app_idx);
+	}
+}
+
+/* ========================================================================= */
+/* --- TIMER HANDLERS ---                                                    */
+/* ========================================================================= */
+
+/* Gui burst gradient discover (5 lan, cach nhau 3s) */
+static void gradient_discover_handler(struct k_work *work)
+{
+	send_gradient_discover();
+	discover_burst_count++;
+	if (discover_burst_count < GRADIENT_DISCOVER_BURST_COUNT) {
+		k_work_reschedule(&gradient_discover_work, K_MSEC(GRADIENT_DISCOVER_BURST_INTERVAL));
+	}
+}
+
+/* Tai kham pha gradient dinh ky */
+static void gradient_rediscover_handler(struct k_work *work)
+{
+	gradient_sequence++;
+	discover_burst_count = 0;
+	LOG_INF("--- [GRADIENT]: === BAT DAU TAI KHAM PHA, seq=%u === ---", gradient_sequence);
+	k_work_reschedule(&gradient_discover_work, K_NO_WAIT);
+	k_work_reschedule(&gradient_rediscover_work, K_MSEC(GRADIENT_REDISCOVER_INTERVAL));
+}
+
+/* Tu dong subscribe group address */
+static void init_subscription_handler(struct k_work *work)
+{
+	/* Tu dong gan dia chi publish/subscribe cua Vendor Model ve group 0xC000 */
+	if (vnd_srv_model && vnd_srv_model->groups && vnd_srv_model->pub) {
+		vnd_srv_model->pub->addr = 0xC000;
+		if (vnd_srv_model->groups[0] != 0xC000) {
+			vnd_srv_model->groups[0] = 0xC000;
+			LOG_INF("--- [SYSTEM]: Gateway tu dong gan Vendor model den Group: 0xC000 ---");
+		}
+	}
+
+	/* Tu dong gan dia chi publish/subscribe cua Sensor Client ve group 0xC000 */
+	if (sensor_cli_model && sensor_cli_model->groups && sensor_cli_model->pub) {
+		sensor_cli_model->pub->addr = 0xC000;
+		if (sensor_cli_model->groups[0] != 0xC000) {
+			sensor_cli_model->groups[0] = 0xC000;
+			LOG_INF("--- [SYSTEM]: Gateway tu dong gan Sensor Client den Group: 0xC000 ---");
+		}
+	}
+
+	/* OnOff Server cua LED1 (Index 1) se subscribe group 0xC002 de nhan tin hieu dieu khien */
+	struct bt_mesh_model *onoff_srv_model = NULL;
+	if (ELEMENTS_SIZE > 1 && p_elements) {
+		onoff_srv_model = &p_elements[1].models[0];
+	}
+	if (onoff_srv_model && onoff_srv_model->groups) {
+		if (onoff_srv_model->groups[0] != 0xC002) {
+			onoff_srv_model->groups[0] = 0xC002;
+			LOG_INF("--- [SYSTEM]: Gateway tu dong subscribe ONOFF Server den Group: 0xC002 ---");
+		}
+	}
+
+	/* Kiem tra xem da san sang chua */
+	bool has_key = false;
+	for (int i = 0; i < CONFIG_BT_MESH_MODEL_KEY_COUNT; i++) {
+		if (vnd_srv_model && vnd_srv_model->keys[i] != BT_MESH_KEY_UNUSED) {
+			has_key = true;
+			break;
+		}
+	}
+
+	if (!has_key) {
+		k_work_reschedule(&init_subscription_work, K_MSEC(5000));
+	}
+}
+
+static int handle_sensor_status(const struct bt_mesh_model *model,
+				struct bt_mesh_msg_ctx *ctx,
+				struct net_buf_simple *buf)
+{
+	while (buf->len >= 3) {
+		uint8_t header = net_buf_simple_pull_u8(buf);
+		uint16_t prop_id = net_buf_simple_pull_le16(buf);
+
+		bool is_format_b = (header & 0x01) != 0;
+		uint8_t length = 0;
+
+		if (is_format_b) {
+			length = (header >> 1) + 1;
+		} else {
+			length = ((header >> 1) & 0x07) + 1;
+		}
+
+		if (buf->len < length) {
+			break;
+		}
+
+		uint8_t *val_ptr = net_buf_simple_pull_mem(buf, length);
+
+		if (prop_id == PROP_ID_SUBNET_REPORT && length == sizeof(struct subnet_report_val_t)) {
+			struct subnet_report_val_t *report = (struct subnet_report_val_t *)val_ptr;
+			uint16_t origin = report->origin;
+			int16_t sensor_val = report->sensor_value;
+			uint8_t battery = report->battery_level;
+
+			if (current_cycle_seq == 0) {
+				current_cycle_seq = 1;
+			}
+
+			LOG_INF("GW_PACKET seq=%u origin=0x%04X sender=0x%04X value=%d pin=%u%%",
+				current_cycle_seq, origin, ctx->addr, sensor_val, battery);
+
+			update_and_print_sensor_list(origin, sensor_val, battery);
+		}
 	}
 
 	return 0;
 }
 
-static const struct bt_mesh_model_op vnd_srv_ops[] = {
-	{ VND_OP_SENSOR_DATA, sizeof(struct sensor_data_msg_t), handle_sensor_data }, 
-	{ VND_OP_RREQ, sizeof(struct rreq_msg_t), handle_rreq },
-	BT_MESH_MODEL_OP_END,
-};
 /* ========================================================================= */
-
-/* --- TỪ ĐÂY TRỞ XUỐNG LÀ LOGIC GỐC CỦA BẠN (ĐƯỢC GIỮ NGUYÊN) --- */
+/* --- LED / ONOFF / HEALTH SERVER (GIU NGUYEN) ---                          */
+/* ========================================================================= */
 
 static void led_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
 		    const struct bt_mesh_onoff_set *set,
@@ -276,6 +405,16 @@ static void led_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
 	}
 
 	led->value = set->on_off;
+
+	/* NetGroup Control: LED1 tuong ung voi chan trang thai thuc ngu/kich hoat he thong */
+	if (led_idx == 1 && set->on_off == 1) {
+		LOG_INF("--- [GATEWAY]: Kich hoat he thong tu dt (Group 0xC002), khoi chay gradient discovery ngay lap tuc! ---");
+		gradient_sequence++;
+		discover_burst_count = 0;
+		k_work_reschedule(&gradient_discover_work, K_NO_WAIT);
+		k_work_reschedule(&gradient_rediscover_work, K_MSEC(GRADIENT_REDISCOVER_INTERVAL));
+	}
+
 	if (!bt_mesh_model_transition_time(set->transition)) {
 		led->remaining = 0;
 		dk_set_led(led_idx, set->on_off);
@@ -318,6 +457,7 @@ static void led_work(struct k_work *work)
 	}
 }
 
+/* --- ATTENTION BLINK --- */
 static struct k_work_delayable attention_blink_work;
 static bool attention;
 
@@ -369,31 +509,26 @@ static struct bt_mesh_health_srv health_srv = {
 
 BT_MESH_HEALTH_PUB_DEFINE(health_pub, 0);
 
+/* ========================================================================= */
+/* --- MESH COMPOSITION ---                                                  */
+/* ========================================================================= */
 static struct bt_mesh_elem elements[] = {
 #if DT_NODE_EXISTS(DT_ALIAS(led0))
 	BT_MESH_ELEM(
 		1, BT_MESH_MODEL_LIST(
 			BT_MESH_MODEL_CFG_SRV,
 			BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
-			BT_MESH_MODEL_ONOFF_SRV(&led_ctx[0].srv)),
-		/* THÊM MỚI VÀO ELEMENT 1: Thêm cái Vendor Server Model vào đuôi */
+			BT_MESH_MODEL_ONOFF_SRV(&led_ctx[0].srv),
+			BT_MESH_MODEL_CB(BT_MESH_MODEL_ID_SENSOR_CLI, sensor_cli_ops, &sensor_cli_pub, NULL, NULL)
+		),
 		BT_MESH_MODEL_LIST(
-			BT_MESH_MODEL_VND(VND_COMPANY_ID, VND_MODEL_ID_SRV, vnd_srv_ops, NULL, NULL)
+			BT_MESH_MODEL_VND(VND_COMPANY_ID, VND_MODEL_ID_SRV,
+					   vnd_srv_ops, &vnd_pub, NULL)
 		)),
 #endif
 #if DT_NODE_EXISTS(DT_ALIAS(led1))
 	BT_MESH_ELEM(
-		2, BT_MESH_MODEL_LIST(BT_MESH_MODEL_ONOFF_SRV(&led_ctx[1].srv)),
-		BT_MESH_MODEL_NONE),
-#endif
-#if DT_NODE_EXISTS(DT_ALIAS(led2))
-	BT_MESH_ELEM(
-		3, BT_MESH_MODEL_LIST(BT_MESH_MODEL_ONOFF_SRV(&led_ctx[2].srv)),
-		BT_MESH_MODEL_NONE),
-#endif
-#if DT_NODE_EXISTS(DT_ALIAS(led3))
-	BT_MESH_ELEM(
-		4, BT_MESH_MODEL_LIST(BT_MESH_MODEL_ONOFF_SRV(&led_ctx[3].srv)),
+		3, BT_MESH_MODEL_LIST(BT_MESH_MODEL_ONOFF_SRV(&led_ctx[1].srv)),
 		BT_MESH_MODEL_NONE),
 #endif
 };
@@ -404,13 +539,90 @@ static const struct bt_mesh_comp comp = {
 	.elem_count = ARRAY_SIZE(elements),
 };
 
+/* ========================================================================= */
+/* --- KHOI TAO ---                                                          */
+/* ========================================================================= */
 const struct bt_mesh_comp *model_handler_init(void)
 {
+	p_elements = elements;
 	k_work_init_delayable(&attention_blink_work, attention_blink);
 
 	for (int i = 0; i < ARRAY_SIZE(led_ctx); ++i) {
 		k_work_init_delayable(&led_ctx[i].work, led_work);
 	}
 
+	/* Khoi tao gradient discovery timers */
+	k_work_init_delayable(&gradient_discover_work, gradient_discover_handler);
+	k_work_init_delayable(&gradient_rediscover_work, gradient_rediscover_handler);
+	k_work_init_delayable(&init_subscription_work, init_subscription_handler);
+
+	/* Luu tham chieu den Vendor Model va Sensor Client Model */
+	vnd_srv_model = &elements[0].vnd_models[0];
+	sensor_cli_model = &elements[0].models[3];
+
+	/* Len lich kham pha gradient som hon de san sang cho chu ky gui dau tien */
+	gradient_sequence = 1;
+	discover_burst_count = 0;
+	k_work_reschedule(&gradient_discover_work, K_MSEC(3000));
+	k_work_reschedule(&gradient_rediscover_work,
+			  K_MSEC(GRADIENT_REDISCOVER_INTERVAL + 3000));
+
+	/* Tu dong subscribe sau 2s */
+	k_work_reschedule(&init_subscription_work, K_MSEC(2000));
+	total_rx_count = 0;
+	unique_rx_count = 0;
+	current_cycle_rx_count = 0;
+	current_cycle_seq = 1;
+
 	return &comp;
+}
+
+void check_and_self_provision(void)
+{
+#if defined(CONFIG_BOARD_NRF52_BSIM)
+	const char *addr_str = getenv("NODE_ADDR");
+	if (addr_str != NULL) {
+		uint16_t addr = (uint16_t)strtol(addr_str, NULL, 0);
+		if (addr != 0) {
+			LOG_INF("--- [SYSTEM]: BabbleSim detected. NODE_ADDR=%s (0x%04X) ---", addr_str, addr);
+			static const uint8_t net_key[16] = { 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
+			static const uint8_t dev_key[16] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00 };
+			static const uint8_t app_key[16] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99 };
+
+			int err = bt_mesh_provision(net_key, 0, 0, 0, addr, dev_key);
+			if (err && err != -EALREADY) {
+				LOG_ERR("--- [SYSTEM]: Self-provisioning failed (err %d) ---", err);
+			} else {
+				LOG_INF("--- [SYSTEM]: Self-provisioning successful! ---");
+				err = bt_mesh_app_key_add(0, 0, app_key);
+				if (err && err != -EALREADY) {
+					LOG_ERR("--- [SYSTEM]: Failed to add AppKey (err %d) ---", err);
+				} else {
+					LOG_INF("--- [SYSTEM]: AppKey 0 added successfully! ---");
+
+					// Bind AppKey 0 to all models
+					for (int i = 0; i < ARRAY_SIZE(elements); i++) {
+						struct bt_mesh_elem *elem = &elements[i];
+						for (int j = 0; j < elem->model_count; j++) {
+							struct bt_mesh_model *model = &elem->models[j];
+							if (model->id == BT_MESH_MODEL_ID_CFG_SRV || model->id == BT_MESH_MODEL_ID_HEALTH_SRV) {
+								continue;
+							}
+							if (model->keys_cnt > 0) {
+								model->keys[0] = 0;
+							}
+						}
+						for (int j = 0; j < elem->vnd_model_count; j++) {
+							struct bt_mesh_model *model = &elem->vnd_models[j];
+							if (model->keys_cnt > 0) {
+								model->keys[0] = 0;
+							}
+						}
+					}
+					LOG_INF("--- [SYSTEM]: Bound AppKey 0 to all models! ---");
+				}
+			}
+		}
+	}
+#endif
 }

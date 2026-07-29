@@ -1,5 +1,3 @@
-#include <zephyr/dt-bindings/adc/nrf-saadc.h>
-
 /* Device Tree Overlay cho bo mạch nRF52840 Temperature Logger
  * Dựa trên sơ đồ phần cứng: ph_nRF52840_temperature_logger_hw.kicad_sch
  */
@@ -195,25 +193,4 @@
     pinctrl-0 = <&uart0_default>;
     pinctrl-1 = <&uart0_sleep>;
     pinctrl-names = "default", "sleep";
-};
-
-/ {
-	zephyr,user {
-		io-channels = <&adc 0>;
-	};
-};
-
-&adc {
-	status = "okay";
-	#address-cells = <1>;
-	#size-cells = <0>;
-
-	channel@0 {
-		reg = <0>;
-		zephyr,gain = "ADC_GAIN_1_6";
-		zephyr,reference = "ADC_REF_INTERNAL";
-		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
-		zephyr,input-positive = <NRF_SAADC_VDD>;
-		zephyr,resolution = <12>;
-	};
 };

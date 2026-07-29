@@ -1,0 +1,40 @@
+/ {
+	aliases {
+		led0 = &led0;
+		led1 = &led1;
+		led2 = &led2;
+		led3 = &led3;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led0 {
+			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+			label = "Green LED 0";
+		};
+		led1: led1 {
+			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+			label = "Green LED 1";
+		};
+		led2: led2 {
+			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+			label = "Green LED 2";
+		};
+		led3: led3 {
+			gpios = <&gpio0 3 GPIO_ACTIVE_LOW>;
+			label = "Green LED 3";
+		};
+	};
+
+	gpio0: gpio0 {
+		compatible = "zephyr,gpio-emul";
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+
+	gpio1: gpio1 {
+		compatible = "zephyr,gpio-emul";
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+};

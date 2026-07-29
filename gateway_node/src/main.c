@@ -45,8 +45,14 @@ static void bt_ready(int err)
 		settings_load();
 	}
 
+#if defined(CONFIG_BOARD_NRF52_BSIM)
+	check_and_self_provision();
+#else
 	/* This will be a no-op if settings_load() loaded provisioning info */
 	bt_mesh_prov_enable(BT_MESH_PROV_ADV | BT_MESH_PROV_GATT);
+#endif
+
+
 
 	printk("Mesh initialized\n");
 
