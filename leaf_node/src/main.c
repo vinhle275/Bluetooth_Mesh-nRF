@@ -47,7 +47,9 @@ static void bt_ready(int err)
 
 
 	printk("Mesh initialized\n");
-	dk_set_leds(0x00); 
+	/* Leaf starts in the always-awake state. LED0 indicates awake/sleep. */
+	dk_set_leds(DK_NO_LEDS_MSK);
+	dk_set_led(0, true);
 }
 
 int main(void)
