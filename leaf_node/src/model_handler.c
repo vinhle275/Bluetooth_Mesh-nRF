@@ -273,10 +273,8 @@ static int send_sensor_status_message(uint8_t motion_val, uint8_t battery_val)
 	net_buf_simple_add_le16(&msg, bt_mesh_sensor_present_dev_op_efficiency.id);
 	net_buf_simple_add_u8(&msg, battery_val);
 
-	uint8_t send_ttl = sensor_srv.model->pub->ttl;
-	if (send_ttl == 0 || send_ttl == BT_MESH_TTL_DEFAULT) {
-		send_ttl = 7;
-	}
+	/* Always use node's SDK Default TTL (bt_mesh_default_ttl_get()), ignoring nRF Mesh app TTL override */
+	uint8_t send_ttl = bt_mesh_default_ttl_get();
 
 	struct bt_mesh_msg_ctx ctx = {
 		.addr     = dst_addr,

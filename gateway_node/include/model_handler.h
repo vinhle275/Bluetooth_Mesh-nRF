@@ -20,6 +20,7 @@ extern "C" {
 
 const struct bt_mesh_comp *model_handler_init(void);
 void check_and_self_provision(void);
+int send_special_sensor_message(uint16_t dst_addr, uint8_t data_val);
 
 
 #ifdef __cplusplus

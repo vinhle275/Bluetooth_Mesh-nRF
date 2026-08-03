@@ -241,6 +241,45 @@ static const struct bt_mesh_sensor_cli_handlers sensor_handlers = {
 	.unknown_type = sensor_unknown_type_cb,
 };
 
+#define SPECIAL_SENSOR_OP BT_MESH_MODEL_OP_2(0x82, 0x99)
+
+int send_special_sensor_message(uint16_t dst_addr, uint8_t data_val)
+{
+	if (!sensor_cli.model) {
+		LOG_WRN("GW_TX_SPECIAL: sensor_cli model not initialized");
+		return -EINVAL;
+	}
+
+	uint16_t app_idx = (sensor_cli.model->keys_cnt > 0) ? sensor_cli.model->keys[0] : BT_MESH_KEY_UNUSED;
+	if (app_idx == BT_MESH_KEY_UNUSED) {
+		LOG_WRN("GW_TX_SPECIAL: AppKey not bound yet on Gateway");
+		return -EADDRNOTAVAIL;
+	}
+
+	NET_BUF_SIMPLE_DEFINE(msg, 16);
+	bt_mesh_model_msg_init(&msg, SPECIAL_SENSOR_OP);
+
+	/* Add 8-bit data field with value = data_val (e.g. 1) */
+	net_buf_simple_add_u8(&msg, data_val);
+
+	struct bt_mesh_msg_ctx ctx = {
+		.addr     = dst_addr,
+		.net_idx  = 0,
+		.app_idx  = app_idx,
+		.send_ttl = 0, /* TTL = 0: Direct 1-hop BLE ADV broadcast, NO RELAY */
+	};
+
+	int err = bt_mesh_model_send(sensor_cli.model, &ctx, &msg, NULL, NULL);
+	if (err) {
+		LOG_ERR("GW_TX_SPECIAL_FAIL dst=0x%04x err=%d", dst_addr, err);
+	} else {
+		LOG_INF("GW_TX_SPECIAL_OK dst=0x%04x op=0x04x data=%u ttl=1 (Direct 1-hop transmission without relay)",
+			dst_addr, SPECIAL_SENSOR_OP, data_val);
+	}
+
+	return err;
+}
+
 static void onoff_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
 			      const struct bt_mesh_onoff_set *set,
 			      struct bt_mesh_onoff_status *rsp)
@@ -251,6 +290,14 @@ static void onoff_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx
 	rsp->target_on_off = set->on_off;
 	rsp->remaining_time = 0;
 	dk_set_led(0, set->on_off);
+
+	if (set->on_off) {
+		LOG_INF("GW_ONOFF ON received from nRF Mesh app -> Broadcasting 1-hop Special Sensor Message (data=1, TTL=1) to ALL NODES (0xFFFF)");
+		send_special_sensor_message(BT_MESH_ADDR_ALL_NODES, 1);
+	} else {
+		LOG_INF("GW_ONOFF OFF received from nRF Mesh app -> Broadcasting 1-hop Special Sensor Message (data=0, TTL=1) to ALL NODES (0xFFFF)");
+		send_special_sensor_message(BT_MESH_ADDR_ALL_NODES, 0);
+	}
 }
 
 static void onoff_get(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
