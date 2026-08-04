@@ -142,7 +142,6 @@ static void print_measurement(struct source_measurement *m,
 {
 	uint32_t now = k_uptime_get_32();
 	uint32_t delta_ms = (m->last_report_ms > 0) ? (now - m->last_report_ms) : 0;
-	uint8_t hops = (ctx->recv_ttl > 0 && ctx->recv_ttl <= 7) ? (7 - ctx->recv_ttl) : 0;
 
 	if (m->data_valid && m->battery_valid) {
 		m->last_report_ms = now;
@@ -150,9 +149,9 @@ static void print_measurement(struct source_measurement *m,
 
 		LOG_INF("=========================================================================");
 		LOG_INF("GW_PACKET RECEIVED! count=%u t_ms=%u src=0x%04x motion=%u%% battery=%u%% "
-			"delta_ms=%u ttl=%u hops=%u dst=0x%04x rssi=%d",
+			"delta_ms=%u ttl=%u dst=0x%04x rssi=%d",
 			complete_packet_count, now, m->addr, m->data, m->battery,
-			delta_ms, ctx->recv_ttl, hops, ctx->recv_dst, ctx->recv_rssi);
+			delta_ms, ctx->recv_ttl, ctx->recv_dst, ctx->recv_rssi);
 		LOG_INF("=========================================================================");
 
 		m->data_valid = false;
@@ -164,9 +163,9 @@ static void print_measurement(struct source_measurement *m,
 
 		LOG_INF("=========================================================================");
 		LOG_INF("GW_PACKET RECEIVED! count=%u t_ms=%u src=0x%04x motion=%u%% "
-			"delta_ms=%u ttl=%u hops=%u dst=0x%04x rssi=%d",
+			"delta_ms=%u ttl=%u dst=0x%04x rssi=%d",
 			complete_packet_count, now, m->addr, m->data,
-			delta_ms, ctx->recv_ttl, hops, ctx->recv_dst, ctx->recv_rssi);
+			delta_ms, ctx->recv_ttl, ctx->recv_dst, ctx->recv_rssi);
 		LOG_INF("=========================================================================");
 	}
 }
@@ -266,14 +265,14 @@ int send_special_sensor_message(uint16_t dst_addr, uint8_t data_val)
 		.addr     = dst_addr,
 		.net_idx  = 0,
 		.app_idx  = app_idx,
-		.send_ttl = 0, /* TTL = 0: Direct 1-hop BLE ADV broadcast, NO RELAY */
+		.send_ttl = 1, /* TTL = 1: Direct 1-hop BLE ADV broadcast, NO RELAY */
 	};
 
 	int err = bt_mesh_model_send(sensor_cli.model, &ctx, &msg, NULL, NULL);
 	if (err) {
 		LOG_ERR("GW_TX_SPECIAL_FAIL dst=0x%04x err=%d", dst_addr, err);
 	} else {
-		LOG_INF("GW_TX_SPECIAL_OK dst=0x%04x op=0x04x data=%u ttl=1 (Direct 1-hop transmission without relay)",
+		LOG_INF("GW_TX_SPECIAL_OK dst=0x%04x op=0x%04x data=%u ttl=1 (Direct 1-hop transmission without relay)",
 			dst_addr, SPECIAL_SENSOR_OP, data_val);
 	}
 

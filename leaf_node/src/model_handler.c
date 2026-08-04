@@ -286,6 +286,32 @@ static int send_sensor_status_message(uint8_t motion_val, uint8_t battery_val)
 	return bt_mesh_model_send(sensor_srv.model, &ctx, &msg, NULL, NULL);
 }
 
+#define SPECIAL_SENSOR_OP 0x8299
+static struct k_work_delayable special_seq_work;
+
+static void special_seq_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	LOG_INF("=========================================================================");
+	LOG_INF("[LEAF 5s TIMER EXPIRED] Transmitting Sensor Model Status & Battery packet...");
+	LOG_INF("=========================================================================");
+
+	/* Send Sensor Status Data + Battery Packet */
+	battery_value = read_battery_level();
+	LOG_INF("[LEAF SENSOR TX] Transmitting Sensor Model data packet (motion=%u%%, battery=%u%%, send_ttl=%u)",
+		simulated_sensor_value, battery_value, bt_mesh_default_ttl_get());
+	send_sensor_status_message(simulated_sensor_value, battery_value);
+}
+
+void bt_mesh_special_pkt_rx_notify(uint8_t data_val)
+{
+	LOG_INF("=========================================================================");
+	LOG_INF("[LEAF RX SPECIAL PKT] Received data=%u! Scheduling 5s timer for Sensor Status packet...", data_val);
+	LOG_INF("=========================================================================");
+	k_work_reschedule(&special_seq_work, K_SECONDS(5));
+}
+
 static void publish_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -497,6 +523,7 @@ const struct bt_mesh_comp *model_handler_init(void)
 	k_work_init_delayable(&cycle_work, cycle_handler);
 	k_work_init_delayable(&publish_work, publish_handler);
 	k_work_init_delayable(&suspend_work, suspend_handler);
+	k_work_init_delayable(&special_seq_work, special_seq_handler);
 	k_work_init_delayable(&mesh_config_work, mesh_config_handler);
 	k_work_init_delayable(&attention_blink_work, attention_blink);
 	for (int i = 0; i < ARRAY_SIZE(led_ctx); ++i) {
