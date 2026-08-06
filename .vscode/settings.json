@@ -2,5 +2,6 @@
     "nrf-connect.applications": [
         "${workspaceFolder}\\gateway_node",
         "${workspaceFolder}\\leaf_node"
-    ]
+    ],
+    "idf.currentSetup": "D:/Appfile/ESP_IDF/Espressif/frameworks/esp-idf-v5.4.4/"
 }
