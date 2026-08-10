@@ -176,33 +176,20 @@ static void print_measurement(struct source_measurement *m, uint16_t dst_addr, u
 	uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 	uint32_t delta_ms = (m->last_report_ms > 0) ? (now - m->last_report_ms) : 0;
 
-	if (m->data_valid && m->battery_valid) {
-		m->last_report_ms = now;
-		complete_packet_count++;
+	m->last_report_ms = now;
+	complete_packet_count++;
 
-		ESP_LOGI(TAG, "=========================================================================");
-		ESP_LOGI(TAG, "GW_PACKET RECEIVED! count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x motion=%u%% battery=%u%% "
-			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d%s",
-			 complete_packet_count, now, m->addr, m->data, m->battery,
-			 delta_ms, recv_ttl, dst_addr, rssi,
-			 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
-		ESP_LOGI(TAG, "=========================================================================");
+	ESP_LOGI(TAG, "=========================================================================");
+	ESP_LOGI(TAG, "GW_PACKET RECEIVED! count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x data=%u battery=%u "
+		 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d%s",
+		 complete_packet_count, now, m->addr, m->data, m->battery,
+		 delta_ms, recv_ttl, dst_addr, rssi,
+		 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
+	ESP_LOGI(TAG, "=========================================================================");
 
-		m->data_valid = false;
-		m->battery_valid = false;
-		m->first_seen_ms = now;
-	} else if (m->data_valid) {
-		m->last_report_ms = now;
-		complete_packet_count++;
-
-		ESP_LOGI(TAG, "=========================================================================");
-		ESP_LOGI(TAG, "GW_PACKET RECEIVED! count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x motion=%u%% "
-			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d%s",
-			 complete_packet_count, now, m->addr, m->data,
-			 delta_ms, recv_ttl, dst_addr, rssi,
-			 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
-		ESP_LOGI(TAG, "=========================================================================");
-	}
+	m->data_valid = false;
+	m->battery_valid = false;
+	m->first_seen_ms = now;
 }
 
 int send_special_sensor_message(esp_ble_mesh_model_t *model, const esp_ble_mesh_msg_ctx_t *in_ctx, uint8_t data_val)
@@ -327,10 +314,6 @@ static void example_ble_mesh_sensor_client_cb(esp_ble_mesh_sensor_client_cb_even
 				uint8_t mpid_len = (fmt == ESP_BLE_MESH_SENSOR_DATA_FORMAT_A ? 2 : 3);
 				uint8_t val = (pos + mpid_len < len) ? data[pos + mpid_len] : 0;
 
-				ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x property=0x%04x value=%u%% ttl=%u rssi=%d%s",
-					 sensor_callback_count, now, src_addr, dst_addr, prop_id, val, recv_ttl, recv_rssi,
-					 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
-
 				if (prop_id == 0x0042) {
 					m->data = val;
 					m->data_valid = true;
@@ -338,6 +321,12 @@ static void example_ble_mesh_sensor_client_cb(esp_ble_mesh_sensor_client_cb_even
 					m->battery = val;
 					m->battery_valid = true;
 				}
+
+				ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x property=0x%04x (%s) data=%u battery=%u ttl=%u rssi=%d%s",
+					 sensor_callback_count, now, src_addr, dst_addr, prop_id,
+					 (prop_id == 0x0042 ? "DATA/MOTION" : prop_id == 0x0054 ? "BATTERY" : "OTHER"),
+					 m->data, m->battery, recv_ttl, recv_rssi,
+					 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
 
 				pos += mpid_len + data_len + 1;
 			}
