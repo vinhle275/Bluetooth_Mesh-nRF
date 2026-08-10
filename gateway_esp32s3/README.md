@@ -4,38 +4,38 @@ Dự án firmware Bluetooth Mesh Gateway cho mạch **ESP32-S3**, được thi�
 
 ## 1. Cấu Trúc Element & Model (Y Hệt `gateway_node`)
 
-- **Element 1 (Primary Element, Unicast Address `0x000C` / Provisioned Address)**:
-  - Configuration Server Model (`BT_MESH_MODEL_CFG_SRV`)
-  - Health Server Model (`BT_MESH_MODEL_HEALTH_SRV`)
-  - Sensor Client Model (`BT_MESH_MODEL_SENSOR_CLI`), lắng nghe dữ liệu Cảm biến trên Group Address `0xC000`.
+- **Element 1 (Primary Element, Provisioned Element 0 trong ESP-IDF)**:
+  - Configuration Server Model (`ESP_BLE_MESH_MODEL_CFG_SRV`)
+  - Health Server Model (`ESP_BLE_MESH_MODEL_HEALTH_SRV`)
+  - Sensor Client Model (`ESP_BLE_MESH_MODEL_SENSOR_CLI`), lắng nghe dữ liệu Cảm biến trên Group Address `0xC000`.
 
-- **Element 2 (Secondary Element, Unicast Address `0x000D` / `primary + 1`)**:
-  - Generic OnOff Server Model (`BT_MESH_MODEL_GEN_ONOFF_SRV`).
-  - Khi nhận lệnh **ON** hoặc **OFF** từ ứng dụng nRF Mesh trên điện thoại, tự động kích hoạt gói tin đặc biệt Broadcast `0xFFFF` với `TTL = 1`.
+- **Element 2 (Secondary Element, Provisioned Element 1 trong ESP-IDF)**:
+  - Generic OnOff Server Model (`ESP_BLE_MESH_MODEL_GEN_ONOFF_SRV`).
+  - Khi nhận lệnh **ON** hoặc **OFF** từ ứng dụng nRF Mesh trên điện thoại, tự động kích hoạt gửi gói tin đặc biệt Broadcast `0xFFFF` với `TTL = 7`.
 
 ## 2. Gói Tin Đặc Biệt (Special Sensor Message)
 
 - **Opcode**: `0x8299` (`SPECIAL_SENSOR_OP`).
-- **Địa chỉ phát**: `0xFFFF` (`BT_MESH_ADDR_ALL_NODES` / Broadcast toàn mạng).
-- **TTL**: `1` (Direct 1-hop BLE ADV broadcast, NO RELAY).
+- **Địa chỉ phát**: `0xFFFF` (`ESP_BLE_MESH_ADDR_ALL_NODES` / Broadcast toàn mạng).
+- **TTL**: `7` (Multi-hop mesh broadcast với TTL = 7).
 - **Trường dữ liệu**: `1` khi ON, `0` khi OFF.
 - **Log định dạng**:
   ```text
-  GW_ONOFF ON received from nRF Mesh app -> Broadcasting 1-hop Special Sensor Message (data=1, TTL=1) to ALL NODES (0xFFFF)
-  GW_TX_SPECIAL_OK dst=0xffff op=0x8299 data=1 ttl=1 (Direct 1-hop transmission without relay)
+  GW_ONOFF ON received from nRF Mesh app -> Broadcasting Special Sensor Message (data=1, TTL=7) to ALL NODES (0xFFFF)
+  GW_TX_SPECIAL_OK dst=0xffff op=0x8299 data=1 ttl=7 (Broadcast with TTL=7)
   ```
 
-## 3. Quản Lý Dữ Liệu Cảm Biến & Log Nhận Dữ Liệu
+## 3. Quản Lý Dữ Liệu Cảm Biến & Log Nhận Dữ Liệu (Bao gồm TTL = 1)
 
-- Theo dõi mảng `measurements[32]` cho các nút gửi dữ liệu Motion (`0x0042`) và Battery Level (`0x0054`).
+- Theo dõi mảng `measurements[32]` cho các nút gửi dữ liệu Motion (`0x0042`) và Battery Level (`0x0054`) từ các chip nRF và node khác.
 - **Log khi nhận được từng thuộc tính (`GW_RX`)**:
   ```text
-  GW_RX count=1 t_ms=189114 src=0x0010 dst=0xc000 property=0x0042 value=57% ttl=1 rssi=-55
+  GW_RX count=1 t_ms=189114 src=0x0010 dst=0xc000 property=0x0042 value=57% ttl=1 rssi=-55 [TTL=1 Direct Rx]
   ```
 - **Log khi hoàn tất gói tin tổng hợp (`GW_PACKET RECEIVED!`)**:
   ```text
   =========================================================================
-  GW_PACKET RECEIVED! count=1 t_ms=189114 src=0x0010 motion=57% battery=50% delta_ms=2 ttl=1 dst=0xc000 rssi=-55
+  GW_PACKET RECEIVED! count=1 t_ms=189114 src=0x0010 motion=57% battery=50% delta_ms=2 ttl=1 dst=0xc000 rssi=-55 [TTL=1 Direct Rx]
   =========================================================================
   ```
 - **Log định kỳ trạng thái Gateway (`GW_STATUS`)**:
@@ -65,3 +65,4 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 *(Thay `COMx` bằng cổng Serial COM thực tế của mạch ESP32-S3 trên máy tính)*.
+

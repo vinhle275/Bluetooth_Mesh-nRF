@@ -123,10 +123,20 @@ static esp_ble_mesh_prov_t provision = {
 };
 
 static esp_timer_handle_t status_timer;
+static esp_timer_handle_t rx_led_timer;
+
+static void rx_led_off_timer_cb(void *arg)
+{
+	board_led_operation(LED_1, LED_OFF);
+}
 
 static void indicate_sensor_rx(void)
 {
 	board_led_operation(LED_1, LED_ON);
+	if (rx_led_timer) {
+		esp_timer_stop(rx_led_timer);
+		esp_timer_start_once(rx_led_timer, 1000000); /* 1 second in microseconds */
+	}
 }
 
 static struct source_measurement *measurement_for(uint16_t addr)
@@ -172,9 +182,10 @@ static void print_measurement(struct source_measurement *m, uint16_t dst_addr, u
 
 		ESP_LOGI(TAG, "=========================================================================");
 		ESP_LOGI(TAG, "GW_PACKET RECEIVED! count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x motion=%u%% battery=%u%% "
-			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d",
+			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d%s",
 			 complete_packet_count, now, m->addr, m->data, m->battery,
-			 delta_ms, recv_ttl, dst_addr, rssi);
+			 delta_ms, recv_ttl, dst_addr, rssi,
+			 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
 		ESP_LOGI(TAG, "=========================================================================");
 
 		m->data_valid = false;
@@ -186,9 +197,10 @@ static void print_measurement(struct source_measurement *m, uint16_t dst_addr, u
 
 		ESP_LOGI(TAG, "=========================================================================");
 		ESP_LOGI(TAG, "GW_PACKET RECEIVED! count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x motion=%u%% "
-			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d",
+			 "delta_ms=%" PRIu32 " ttl=%u dst=0x%04x rssi=%d%s",
 			 complete_packet_count, now, m->addr, m->data,
-			 delta_ms, recv_ttl, dst_addr, rssi);
+			 delta_ms, recv_ttl, dst_addr, rssi,
+			 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
 		ESP_LOGI(TAG, "=========================================================================");
 	}
 }
@@ -213,7 +225,7 @@ int send_special_sensor_message(esp_ble_mesh_model_t *model, const esp_ble_mesh_
 		.net_idx = net_idx,
 		.app_idx = app_idx,
 		.addr = ESP_BLE_MESH_ADDR_ALL_NODES,   /* 0xFFFF (ESP_BLE_MESH_ADDR_ALL_NODES) */
-		.send_ttl = 1,                          /* TTL = 1: Direct 1-hop BLE ADV broadcast, NO RELAY */
+		.send_ttl = 7,                          /* TTL = 7: Broadcast with TTL=7 as requested */
 		.send_rel = false,
 	};
 
@@ -225,7 +237,7 @@ int send_special_sensor_message(esp_ble_mesh_model_t *model, const esp_ble_mesh_
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG, "GW_TX_SPECIAL_FAIL dst=0x%04x err=%d", ctx.addr, err);
 	} else {
-		ESP_LOGI(TAG, "GW_TX_SPECIAL_OK dst=0x%04x op=0x%04x data=%u ttl=1 (Direct 1-hop transmission without relay)",
+		ESP_LOGI(TAG, "GW_TX_SPECIAL_OK dst=0x%04x op=0x%04x data=%u ttl=7 (Broadcast with TTL=7)",
 			 ctx.addr, SPECIAL_SENSOR_OP, data_val);
 	}
 
@@ -246,10 +258,10 @@ static void example_ble_mesh_generic_server_cb(esp_ble_mesh_generic_server_cb_ev
 			board_led_operation(LED_0, onoff);
 
 			if (onoff) {
-				ESP_LOGI(TAG, "GW_ONOFF ON received from nRF Mesh app -> Broadcasting 1-hop Special Sensor Message (data=1, TTL=1) to ALL NODES (0xFFFF)");
+				ESP_LOGI(TAG, "GW_ONOFF ON received from nRF Mesh app -> Broadcasting Special Sensor Message (data=1, TTL=7) to ALL NODES (0xFFFF)");
 				send_special_sensor_message(param->model, &param->ctx, 1);
 			} else {
-				ESP_LOGI(TAG, "GW_ONOFF OFF received from nRF Mesh app -> Broadcasting 1-hop Special Sensor Message (data=0, TTL=1) to ALL NODES (0xFFFF)");
+				ESP_LOGI(TAG, "GW_ONOFF OFF received from nRF Mesh app -> Broadcasting Special Sensor Message (data=0, TTL=7) to ALL NODES (0xFFFF)");
 				send_special_sensor_message(param->model, &param->ctx, 0);
 			}
 
@@ -315,8 +327,9 @@ static void example_ble_mesh_sensor_client_cb(esp_ble_mesh_sensor_client_cb_even
 				uint8_t mpid_len = (fmt == ESP_BLE_MESH_SENSOR_DATA_FORMAT_A ? 2 : 3);
 				uint8_t val = (pos + mpid_len < len) ? data[pos + mpid_len] : 0;
 
-				ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x property=0x%04x value=%u%% ttl=%u rssi=%d",
-					 sensor_callback_count, now, src_addr, dst_addr, prop_id, val, recv_ttl, recv_rssi);
+				ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x property=0x%04x value=%u%% ttl=%u rssi=%d%s",
+					 sensor_callback_count, now, src_addr, dst_addr, prop_id, val, recv_ttl, recv_rssi,
+					 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
 
 				if (prop_id == 0x0042) {
 					m->data = val;
@@ -340,15 +353,24 @@ static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t
 	if (event == ESP_BLE_MESH_CFG_SERVER_STATE_CHANGE_EVT) {
 		switch (param->ctx.recv_op) {
 		case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD:
-			ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD");
+			ESP_LOGI(TAG, "[CONFIG SRV] AppKey Added: net_idx=0x%04x, app_idx=0x%04x",
+				 param->value.state_change.appkey_add.net_idx,
+				 param->value.state_change.appkey_add.app_idx);
 			break;
 		case ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND:
-			ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND");
+			ESP_LOGI(TAG, "[CONFIG SRV] Model App Bound: elem_addr=0x%04x, app_idx=0x%04x, model_id=0x%04x",
+				 param->value.state_change.mod_app_bind.element_addr,
+				 param->value.state_change.mod_app_bind.app_idx,
+				 param->value.state_change.mod_app_bind.model_id);
 			break;
 		case ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD:
-			ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD");
+			ESP_LOGI(TAG, "[CONFIG SRV] Model Group Subscription Added: elem_addr=0x%04x, sub_addr=0x%04x, model_id=0x%04x",
+				 param->value.state_change.mod_sub_add.element_addr,
+				 param->value.state_change.mod_sub_add.sub_addr,
+				 param->value.state_change.mod_sub_add.model_id);
 			break;
 		default:
+			ESP_LOGI(TAG, "[CONFIG SRV] Config State Change opcode=0x%06" PRIx32, param->ctx.recv_op);
 			break;
 		}
 	}
@@ -359,13 +381,25 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
 {
 	switch (event) {
 	case ESP_BLE_MESH_PROV_REGISTER_COMP_EVT:
-		ESP_LOGI(TAG, "ESP_BLE_MESH_PROV_REGISTER_COMP_EVT, err_code %d", param->prov_register_comp.err_code);
+		ESP_LOGI(TAG, "[PROV] Provisioning Register Complete, err_code %d", param->prov_register_comp.err_code);
 		break;
 	case ESP_BLE_MESH_NODE_PROV_ENABLE_COMP_EVT:
-		ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_ENABLE_COMP_EVT, err_code %d", param->node_prov_enable_comp.err_code);
+		ESP_LOGI(TAG, "[PROV] Node Provisioning Bearer Enabled (ADV|GATT), err_code %d", param->node_prov_enable_comp.err_code);
+		break;
+	case ESP_BLE_MESH_NODE_PROV_LINK_OPEN_EVT:
+		ESP_LOGI(TAG, "[PROV] Provisioning Link Opened (bearer: %s)",
+			 param->node_prov_link_open.bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+		break;
+	case ESP_BLE_MESH_NODE_PROV_LINK_CLOSE_EVT:
+		ESP_LOGI(TAG, "[PROV] Provisioning Link Closed (bearer: %s)",
+			 param->node_prov_link_close.bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
 		break;
 	case ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT:
-		ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT, addr 0x%04x", param->node_prov_complete.addr);
+		ESP_LOGI(TAG, "[PROV] *** NODE PROVISIONED SUCCESSFULLY *** assigned unicast_addr=0x%04x, net_idx=0x%04x",
+			 param->node_prov_complete.addr, param->node_prov_complete.net_idx);
+		break;
+	case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
+		ESP_LOGW(TAG, "[PROV] Node Provisioning Reset event received");
 		break;
 	default:
 		break;
@@ -446,6 +480,13 @@ static esp_err_t ble_mesh_init(void)
 	esp_timer_create(&timer_args, &status_timer);
 	esp_timer_start_periodic(status_timer, 30000000); /* 30 seconds */
 
+	/* Create 1s Rx LED auto-off timer */
+	const esp_timer_create_args_t led_timer_args = {
+		.callback = &rx_led_off_timer_cb,
+		.name = "rx_led_off_timer"
+	};
+	esp_timer_create(&led_timer_args, &rx_led_timer);
+
 	return ESP_OK;
 }
 
@@ -456,9 +497,8 @@ void app_main(void)
 	/* Disable hardware Brownout Detector instantly to prevent RF calibration power-dip resets */
 	WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
-	/* Filter system logs: quiet noisy components and keep model_handler clear */
-	esp_log_level_set("*", ESP_LOG_WARN);
-	esp_log_level_set(TAG, ESP_LOG_INFO);
+	/* Enable full logging for debugging ESP32-S3 BLE Mesh operations */
+	esp_log_level_set("*", ESP_LOG_INFO);
 
 	ESP_LOGI(TAG, "Initializing...");
 
@@ -484,3 +524,4 @@ void app_main(void)
 		ESP_LOGE(TAG, "Bluetooth mesh init failed (err %d)", err);
 	}
 }
+
