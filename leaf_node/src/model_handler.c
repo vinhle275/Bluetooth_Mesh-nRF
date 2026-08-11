@@ -518,8 +518,13 @@ static const struct bt_mesh_comp comp = {
 	.elem_count = ARRAY_SIZE(elements),
 };
 
+extern bool ttl_modified_by_special_pkt;
+
 const struct bt_mesh_comp *model_handler_init(void)
 {
+	ttl_modified_by_special_pkt = false;
+	bt_mesh_default_ttl_set(7);
+
 	k_work_init_delayable(&cycle_work, cycle_handler);
 	k_work_init_delayable(&publish_work, publish_handler);
 	k_work_init_delayable(&suspend_work, suspend_handler);
@@ -532,7 +537,7 @@ const struct bt_mesh_comp *model_handler_init(void)
 	is_awake = true;
 	tx_sequence = 0;
 	update_awake_led();
-	LOG_INF("LEAF_INIT Sensor Server ready; waiting for trigger/configuration");
+	LOG_INF("LEAF_INIT Sensor Server ready; waiting for trigger/configuration (TTL reset to default, ttl_modified=false)");
 	k_work_reschedule(&mesh_config_work, K_SECONDS(2));
 	return &comp;
 }

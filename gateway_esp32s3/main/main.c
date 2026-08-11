@@ -14,6 +14,7 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
+#include "esp_gap_ble_api.h"
 
 #include "esp_ble_mesh_defs.h"
 #include "esp_ble_mesh_common_api.h"
@@ -23,6 +24,7 @@
 #include "esp_ble_mesh_health_model_api.h"
 #include "esp_ble_mesh_generic_model_api.h"
 #include "esp_ble_mesh_sensor_model_api.h"
+#include "esp_ble_mesh_proxy_api.h"
 
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -192,34 +194,25 @@ static void print_measurement(struct source_measurement *m, uint16_t dst_addr, u
 	m->first_seen_ms = now;
 }
 
-int send_special_sensor_message(esp_ble_mesh_model_t *model, const esp_ble_mesh_msg_ctx_t *in_ctx, uint8_t data_val)
+int send_special_sensor_message(uint16_t app_idx, uint8_t data_val)
 {
-	esp_ble_mesh_model_t *target_model = model ? model : sensor_client.model;
-	if (!target_model) {
-		ESP_LOGW(TAG, "GW_TX_SPECIAL: target model not initialized");
+	if (!sensor_client.model) {
+		ESP_LOGW(TAG, "GW_TX_SPECIAL: sensor_client model not initialized");
 		return -1;
 	}
 
-	uint16_t net_idx = in_ctx ? in_ctx->net_idx : 0;
-	uint16_t app_idx = in_ctx ? in_ctx->app_idx : 0;
-
-	/* Auto-sync AppKey 0 to sensor_client model so all models share valid AppKey */
-	if (sensor_client.model && in_ctx) {
-		sensor_client.model->keys[0] = app_idx;
-	}
+	/* Auto-sync AppKey to sensor_client model */
+	sensor_client.model->keys[0] = app_idx;
 
 	esp_ble_mesh_msg_ctx_t ctx = {
-		.net_idx = net_idx,
+		.net_idx = 0,
 		.app_idx = app_idx,
 		.addr = ESP_BLE_MESH_ADDR_ALL_NODES,   /* 0xFFFF (ESP_BLE_MESH_ADDR_ALL_NODES) */
 		.send_ttl = 7,                          /* TTL = 7: Broadcast with TTL=7 as requested */
 		.send_rel = false,
 	};
 
-	esp_err_t err = esp_ble_mesh_server_model_send_msg(target_model, &ctx, SPECIAL_SENSOR_OP, 1, &data_val);
-	if (err != ESP_OK) {
-		err = esp_ble_mesh_client_model_send_msg(target_model, &ctx, SPECIAL_SENSOR_OP, 1, &data_val, 0, false, ROLE_NODE);
-	}
+	esp_err_t err = esp_ble_mesh_client_model_send_msg(sensor_client.model, &ctx, SPECIAL_SENSOR_OP, 1, &data_val, 0, false, ROLE_NODE);
 
 	if (err != ESP_OK) {
 		ESP_LOGE(TAG, "GW_TX_SPECIAL_FAIL dst=0x%04x err=%d", ctx.addr, err);
@@ -244,14 +237,7 @@ static void example_ble_mesh_generic_server_cb(esp_ble_mesh_generic_server_cb_ev
 			uint8_t onoff = param->value.set.onoff.onoff;
 			board_led_operation(LED_0, onoff);
 
-			if (onoff) {
-				ESP_LOGI(TAG, "GW_ONOFF ON received from nRF Mesh app -> Broadcasting Special Sensor Message (data=1, TTL=7) to ALL NODES (0xFFFF)");
-				send_special_sensor_message(param->model, &param->ctx, 1);
-			} else {
-				ESP_LOGI(TAG, "GW_ONOFF OFF received from nRF Mesh app -> Broadcasting Special Sensor Message (data=0, TTL=7) to ALL NODES (0xFFFF)");
-				send_special_sensor_message(param->model, &param->ctx, 0);
-			}
-
+			/* Send Generic OnOff Status ACK back to phone first to keep GATT connection stable */
 			if (param->ctx.recv_op == ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET) {
 				esp_ble_mesh_gen_onoff_status_cb_t status = {
 					.present_onoff = onoff,
@@ -260,6 +246,15 @@ static void example_ble_mesh_generic_server_cb(esp_ble_mesh_generic_server_cb_ev
 				};
 				esp_ble_mesh_server_model_send_msg(param->model, &param->ctx,
 					ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_STATUS, sizeof(status), (uint8_t *)&status);
+			}
+
+			/* Broadcast Special Sensor Message (data=onoff, TTL=7) to 0xFFFF via sensor_client */
+			if (onoff) {
+				ESP_LOGI(TAG, "GW_ONOFF ON received from nRF Mesh app -> Broadcasting Special Sensor Message (data=1, TTL=7) to ALL NODES (0xFFFF)");
+				send_special_sensor_message(param->ctx.app_idx, 1);
+			} else {
+				ESP_LOGI(TAG, "GW_ONOFF OFF received from nRF Mesh app -> Broadcasting Special Sensor Message (data=0, TTL=7) to ALL NODES (0xFFFF)");
+				send_special_sensor_message(param->ctx.app_idx, 0);
 			}
 		}
 	} else if (event == ESP_BLE_MESH_GENERIC_SERVER_RECV_GET_MSG_EVT) {
@@ -382,10 +377,17 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
 	case ESP_BLE_MESH_NODE_PROV_LINK_CLOSE_EVT:
 		ESP_LOGI(TAG, "[PROV] Provisioning Link Closed (bearer: %s)",
 			 param->node_prov_link_close.bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+		if (esp_ble_mesh_node_is_provisioned()) {
+			ESP_LOGI(TAG, "[PROV] Link closed on provisioned node -> Enabling GATT Proxy & Node Identity Advertising...");
+			esp_ble_mesh_proxy_gatt_enable();
+			esp_ble_mesh_proxy_identity_enable();
+		}
 		break;
 	case ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT:
 		ESP_LOGI(TAG, "[PROV] *** NODE PROVISIONED SUCCESSFULLY *** assigned unicast_addr=0x%04x, net_idx=0x%04x",
 			 param->node_prov_complete.addr, param->node_prov_complete.net_idx);
+		esp_ble_mesh_proxy_gatt_enable();
+		esp_ble_mesh_proxy_identity_enable();
 		break;
 	case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
 		ESP_LOGW(TAG, "[PROV] Node Provisioning Reset event received");
@@ -433,6 +435,12 @@ static esp_err_t bluetooth_init(void)
 		return ret;
 	}
 
+	/* Reduce ESP32 BLE TX Power to minimum level: -12 dBm (ESP_PWR_LVL_N12) */
+	esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_N12);
+	esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N12);
+	esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_N12);
+	ESP_LOGI(TAG, "GW_INIT BLE TX Power reduced to MINIMUM level ESP_PWR_LVL_N12 (-12 dBm)");
+
 	return ESP_OK;
 }
 
@@ -451,13 +459,20 @@ static esp_err_t ble_mesh_init(void)
 		return err;
 	}
 
-	err = esp_ble_mesh_node_prov_enable((esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT));
-	if (err != ESP_OK) {
-		ESP_LOGE(TAG, "Failed to enable mesh node");
-		return err;
+	if (esp_ble_mesh_node_is_provisioned()) {
+		ESP_LOGI(TAG, "Node is already provisioned -> Enabling GATT Proxy & Node Identity Advertising...");
+		esp_ble_mesh_proxy_gatt_enable();
+		esp_ble_mesh_proxy_identity_enable();
+	} else {
+		err = esp_ble_mesh_node_prov_enable((esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT));
+		if (err != ESP_OK) {
+			ESP_LOGE(TAG, "Failed to enable mesh node prov");
+			return err;
+		}
 	}
 
 	esp_ble_mesh_set_unprovisioned_device_name("ESP32S3-Gateway");
+
 
 	ESP_LOGI(TAG, "GW_INIT Sensor Client initialized, waiting for Sensor Status");
 
