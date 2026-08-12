@@ -62,7 +62,7 @@ static uint8_t read_battery_level(void)
 		return 101;
 	}
 
-	return 99;// (uint8_t)CLAMP(((mv - 900) * 100) / 600, 0, 100);
+	return (uint8_t)CLAMP(((mv - 900) * 100) / 600, 0, 100);
 #else
 	return 101;
 #endif
@@ -409,9 +409,9 @@ static void led_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
 
 	if (idx == 1) {
 		/* Element 2 (idx 1) controls cycle mode via Group / Unicast OnOff commands */
-		if (set->on_off) {
+		if (set->on_off == LEAF_LED_STATE_ON) {
 			if (!cycle_mode_active) {
-				led->value = true;
+				led->value = LEAF_LED_STATE_ON;
 				cycle_mode_active = true;
 				is_awake = true;
 				tx_retry_count = 0;
@@ -433,7 +433,7 @@ static void led_set(struct bt_mesh_onoff_srv *srv, struct bt_mesh_msg_ctx *ctx,
 #endif
 				LOG_INF("LEAF_CYCLE Stopped cycle mode via OnOff OFF command");
 			}
-			led->value = false;
+			led->value = LEAF_LED_STATE_OFF;
 		}
 	} else if (!bt_mesh_model_transition_time(set->transition)) {
 		led->remaining = 0;
