@@ -15,12 +15,9 @@ extern uint16_t bt_mesh_primary_addr(void);
 
 LOG_MODULE_REGISTER(model_handler, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define SENSOR_GROUP_ADDR        0xC000
-#define SENSOR_AWAKE_DURATION_MS  5000
-#define SENSOR_SLEEP_DURATION_MS  5000
+#define SENSOR_AWAKE_DURATION_MS  (LEAF_AWAKE_DURATION_SEC * 1000)
+#define SENSOR_SLEEP_DURATION_MS  (LEAF_SLEEP_DURATION_SEC * 1000)
 #define SENSOR_TX_GUARD_MS         500
-#define SENSOR_TX_RETRY_DELAY_MS    700
-#define SENSOR_TX_MAX_RETRIES         2
 
 static uint8_t simulated_sensor_value;
 static uint8_t battery_value;
@@ -307,9 +304,9 @@ static void special_seq_handler(struct k_work *work)
 void bt_mesh_special_pkt_rx_notify(uint8_t data_val)
 {
 	LOG_INF("=========================================================================");
-	LOG_INF("[LEAF RX SPECIAL PKT] Received data=%u! Scheduling 5s timer for Sensor Status packet...", data_val);
+	LOG_INF("[LEAF RX SPECIAL PKT] Received data=%u! Scheduling %us timer for Sensor Status packet...", data_val, SPECIAL_PKT_DELAY_SEC);
 	LOG_INF("=========================================================================");
-	k_work_reschedule(&special_seq_work, K_SECONDS(5));
+	k_work_reschedule(&special_seq_work, K_SECONDS(SPECIAL_PKT_DELAY_SEC));
 }
 
 static void publish_handler(struct k_work *work)
@@ -541,52 +538,4 @@ const struct bt_mesh_comp *model_handler_init(void)
 	k_work_reschedule(&mesh_config_work, K_SECONDS(2));
 	return &comp;
 }
-
-void check_and_self_provision(void)
-{
-#if defined(CONFIG_BOARD_NRF52_BSIM)
-	const char *addr_str = getenv("NODE_ADDR");
-	if (!addr_str) {
-		return;
-	}
-	uint16_t addr = (uint16_t)strtoul(addr_str, NULL, 0);
-	if (!addr) {
-		return;
-	}
-	static const uint8_t net_key[16] = {
-		0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-		0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-	};
-	static const uint8_t dev_key[16] = {
-		0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-		0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
-	};
-	static const uint8_t app_key[16] = {
-		0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11,
-		0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
-	};
-	int err = bt_mesh_provision(net_key, 0, 0, 0, addr, dev_key);
-	if (err && err != -EALREADY) {
-		return;
-	}
-	err = bt_mesh_app_key_add(0, 0, app_key);
-	if (err && err != -EALREADY) {
-		return;
-	}
-	for (int i = 0; i < ARRAY_SIZE(elements); ++i) {
-		for (int j = 0; j < elements[i].model_count; ++j) {
-			struct bt_mesh_model *model = &elements[i].models[j];
-			if (model->id != BT_MESH_MODEL_ID_CFG_SRV &&
-			    model->id != BT_MESH_MODEL_ID_HEALTH_SRV &&
-			    model->keys_cnt > 0) {
-				model->keys[0] = 0;
-			}
-		}
-	}
-
-	if (sensor_srv.model && sensor_srv.model->pub) {
-		sensor_srv.model->pub->addr = SENSOR_GROUP_ADDR;
-		sensor_srv.model->pub->key = 0;
-	}
-#endif
-}
+

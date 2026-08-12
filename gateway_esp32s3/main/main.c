@@ -35,8 +35,13 @@
 
 #define TAG "model_handler"
 
-#define SENSOR_GROUP_ADDR       0xC000
-#define SPECIAL_SENSOR_OP       0x8299
+/* =========================================================================
+ * CẤU HÌNH THAM SỐ GÓI TIN ĐẶC BIỆT PHÍA ESP32-S3 GATEWAY
+ * =========================================================================
+ */
+#define SPECIAL_SENSOR_OP       0x8299  /* Mã Opcode gói đặc biệt */
+#define SPECIAL_PKT_GROUP_ADDR  0xFFFF  /* Địa chỉ Broadcast toàn mạng (0xFFFF) */
+#define SPECIAL_PKT_SEND_TTL    7       /* Mức TTL phát gói đặc biệt (TTL=7) */
 #define MAX_TRACKED_SOURCES     32
 
 #define CID_ESP                 0x02E5
@@ -400,8 +405,8 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
 static void status_timer_callback(void* arg)
 {
 	uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
-	ESP_LOGI(TAG, "GW_STATUS Listening on group 0x%04x... total_rx=%" PRIu32 ", complete_packets=%" PRIu32 ", uptime=%" PRIu32 "s",
-		 SENSOR_GROUP_ADDR, sensor_callback_count, complete_packet_count, uptime_s);
+	ESP_LOGI(TAG, "GW_STATUS Gateway running... total_rx=%" PRIu32 ", complete_packets=%" PRIu32 ", uptime=%" PRIu32 "s",
+		 sensor_callback_count, complete_packet_count, uptime_s);
 }
 
 static esp_err_t bluetooth_init(void)
