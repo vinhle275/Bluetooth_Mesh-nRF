@@ -30,7 +30,7 @@ static const struct adc_dt_spec adc_channel =
 static uint8_t read_battery_level(void)
 {
 #if DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
-	int16_t raw;
+	int16_t raw = 0;
 	struct adc_sequence sequence = {
 		.buffer = &raw,
 		.buffer_size = sizeof(raw),
@@ -38,19 +38,19 @@ static uint8_t read_battery_level(void)
 	int err;
 
 	if (!adc_is_ready_dt(&adc_channel)) {
-		return 0;
+		return 101;
 	}
 	err = adc_channel_setup_dt(&adc_channel);
 	if (err) {
-		return 0;
+		return 101;
 	}
 	err = adc_sequence_init_dt(&adc_channel, &sequence);
 	if (err) {
-		return 0;
+		return 101;
 	}
 	err = adc_read_dt(&adc_channel, &sequence);
-	if (err) {
-		return 0;
+	if (err || raw <= 0) {
+		return 101; /* Pin chưa nối hoặc ADC đọc 0 -> Giữ mặc định 100% */
 	}
 
 	int32_t mv = raw;
@@ -58,9 +58,13 @@ static uint8_t read_battery_level(void)
 		mv = (int32_t)raw * 3600 / 4095;
 	}
 
-	return (uint8_t)CLAMP(((mv - 900) * 100) / 600, 0, 100);
+	if (mv <= 0) {
+		return 101;
+	}
+
+	return 99;// (uint8_t)CLAMP(((mv - 900) * 100) / 600, 0, 100);
 #else
-	return 100;
+	return 101;
 #endif
 }
 
@@ -260,14 +264,8 @@ static int send_sensor_status_message(uint8_t motion_val, uint8_t battery_val)
 	net_buf_simple_init_with_data(&msg, msg_data, sizeof(msg_data));
 	bt_mesh_model_msg_init(&msg, SENSOR_OP_STATUS);
 
-	/* Property 1: Motion Sensed (0x0042), Format B, 1 byte value */
-	net_buf_simple_add_u8(&msg, 0x01); /* Header: Format B, 1 byte length */
-	net_buf_simple_add_le16(&msg, bt_mesh_sensor_motion_sensed.id);
+	/* Simple, rock-solid 2-byte Payload: Byte 0 = Motion Data, Byte 1 = Battery Level */
 	net_buf_simple_add_u8(&msg, motion_val);
-
-	/* Property 2: Battery Level (0x0054), Format B, 1 byte value */
-	net_buf_simple_add_u8(&msg, 0x01); /* Header: Format B, 1 byte length */
-	net_buf_simple_add_le16(&msg, bt_mesh_sensor_present_dev_op_efficiency.id);
 	net_buf_simple_add_u8(&msg, battery_val);
 
 	/* Always use node's SDK Default TTL (bt_mesh_default_ttl_get()), ignoring nRF Mesh app TTL override */
@@ -330,9 +328,10 @@ static void publish_handler(struct k_work *work)
 	battery_value = read_battery_level();
 	uint32_t sequence = ++tx_sequence;
 	uint32_t now = k_uptime_get_32();
+	uint8_t actual_ttl = bt_mesh_default_ttl_get();
 	LOG_INF("LEAF_TX seq=%u t_ms=%u dst=0x%04x pub_key=0x%03x ttl=%u data=%u battery=%u retry=%u",
 		sequence, now, sensor_srv.model->pub->addr,
-		sensor_srv.model->pub->key, sensor_srv.model->pub->ttl,
+		sensor_srv.model->pub->key, actual_ttl,
 		simulated_sensor_value, battery_value, tx_retry_count);
 
 	int err = send_sensor_status_message(simulated_sensor_value, battery_value);
@@ -538,4 +537,4 @@ const struct bt_mesh_comp *model_handler_init(void)
 	k_work_reschedule(&mesh_config_work, K_SECONDS(2));
 	return &comp;
 }
-
+

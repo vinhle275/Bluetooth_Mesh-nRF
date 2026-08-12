@@ -305,31 +305,21 @@ static void example_ble_mesh_sensor_client_cb(esp_ble_mesh_sensor_client_cb_even
 
 			uint8_t *data = param->status_cb.sensor_status.marshalled_sensor_data->data;
 			uint16_t len = param->status_cb.sensor_status.marshalled_sensor_data->len;
-			uint16_t pos = 0;
 
-			while (pos < len) {
-				uint8_t fmt = ESP_BLE_MESH_GET_SENSOR_DATA_FORMAT(data + pos);
-				uint8_t data_len = ESP_BLE_MESH_GET_SENSOR_DATA_LENGTH(data + pos, fmt);
-				uint16_t prop_id = ESP_BLE_MESH_GET_SENSOR_DATA_PROPERTY_ID(data + pos, fmt);
-				uint8_t mpid_len = (fmt == ESP_BLE_MESH_SENSOR_DATA_FORMAT_A ? 2 : 3);
-				uint8_t val = (pos + mpid_len < len) ? data[pos + mpid_len] : 0;
-
-				if (prop_id == 0x0042) {
-					m->data = val;
-					m->data_valid = true;
-				} else if (prop_id == 0x0054) {
-					m->battery = val;
-					m->battery_valid = true;
-				}
-
-				ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x property=0x%04x (%s) data=%u battery=%u ttl=%u rssi=%d%s",
-					 sensor_callback_count, now, src_addr, dst_addr, prop_id,
-					 (prop_id == 0x0042 ? "DATA/MOTION" : prop_id == 0x0054 ? "BATTERY" : "OTHER"),
-					 m->data, m->battery, recv_ttl, recv_rssi,
-					 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
-
-				pos += mpid_len + data_len + 1;
+			if (len >= 2) {
+				m->data = data[0];       /* Byte 0: Motion Data */
+				m->battery = data[1];    /* Byte 1: Battery Level (100) */
+			} else if (len == 1) {
+				m->data = data[0];
+				m->battery = 100;
 			}
+			m->data_valid = true;
+			m->battery_valid = true;
+
+			ESP_LOGI(TAG, "GW_RX count=%" PRIu32 " t_ms=%" PRIu32 " src=0x%04x dst=0x%04x data=%u battery=%u ttl=%u rssi=%d%s",
+				 sensor_callback_count, now, src_addr, dst_addr,
+				 m->data, m->battery, recv_ttl, recv_rssi,
+				 (recv_ttl == 1 ? " [TTL=1 Direct Rx]" : ""));
 		}
 
 		print_measurement(m, dst_addr, recv_ttl, recv_rssi);
