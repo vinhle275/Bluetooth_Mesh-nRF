@@ -6,6 +6,7 @@
 #include <bluetooth/mesh/sensor_types.h>
 #include <dk_buttons_and_leds.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/logging/log.h>
 #include <stdlib.h>
 
@@ -49,8 +50,12 @@ static uint8_t read_battery_level(void)
 		return 101;
 	}
 	err = adc_read_dt(&adc_channel, &sequence);
+
+	/* Tắt ngay ngoại vi ADC để cắt sạch dòng ~350uA khi không đo */
+	pm_device_action_run(adc_channel.dev, PM_DEVICE_ACTION_SUSPEND);
+
 	if (err || raw <= 0) {
-		return 101; /* Pin chưa nối hoặc ADC đọc 0 -> Giữ mặc định 100% */
+		return 100; /* Pin chưa nối hoặc ADC đọc 0 -> Giữ mặc định 100% */
 	}
 
 	int32_t mv = raw;
@@ -59,12 +64,12 @@ static uint8_t read_battery_level(void)
 	}
 
 	if (mv <= 0) {
-		return 101;
+		return 100;
 	}
 
 	return (uint8_t)CLAMP(((mv - 900) * 100) / 600, 0, 100);
 #else
-	return 101;
+	return 100;
 #endif
 }
 
@@ -137,8 +142,12 @@ static uint32_t tx_sequence;
 
 static void update_awake_led(void)
 {
-	/* LED0 is reserved exclusively for the awake/sleep indication. */
-	dk_set_led(0, is_awake);
+	if (is_awake) {
+		dk_set_led(0, true);
+	} else {
+		/* Trong trạng thái ngủ: Tắt TOÀN BỘ các đèn LED để tiết kiệm điện tối đa */
+		dk_set_leds(DK_NO_LEDS_MSK);
+	}
 }
 
 static uint32_t compute_tx_delay_ms(void)
@@ -359,12 +368,18 @@ static void suspend_handler(struct k_work *work)
 		return;
 	}
 
-	for (int i = 0; i < ARRAY_SIZE(led_ctx); i++) {
-		dk_set_led(i, false);
+	/* Tắt 100% tất cả các đèn LED phần cứng */
+	dk_set_leds(DK_NO_LEDS_MSK);
+
+#if DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
+	if (adc_is_ready_dt(&adc_channel)) {
+		pm_device_action_run(adc_channel.dev, PM_DEVICE_ACTION_SUSPEND);
 	}
+#endif
 
 #if !defined(CONFIG_BOARD_NRF52_BSIM)
 	bt_mesh_suspend();
+	bt_le_adv_stop();
 #endif
 	LOG_INF("LEAF_RADIO Suspended radio for sleep cycle");
 }

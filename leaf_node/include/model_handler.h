@@ -27,7 +27,7 @@ extern "C" {
 #endif
 
 #ifndef LEAF_SLEEP_DURATION_SEC
-#define LEAF_SLEEP_DURATION_SEC      5      /* Thời gian Leaf ngủ trong 1 chu kỳ (giây) */
+#define LEAF_SLEEP_DURATION_SEC      10      /* Thời gian Leaf ngủ trong 1 chu kỳ (giây) */
 #endif
 
 #ifndef LEAF_AWAKE_DURATION_SEC
@@ -47,11 +47,11 @@ extern "C" {
  * =========================================================================
  */
 #ifndef LEAF_LED_STATE_ON
-#define LEAF_LED_STATE_ON            0       /* Giá trị BẬT đèn / Kích hoạt Cycle mode (1 = ON) */
+#define LEAF_LED_STATE_ON            1       /* Giá trị BẬT đèn / Kích hoạt Cycle mode (1 = ON) */
 #endif
 
 #ifndef LEAF_LED_STATE_OFF
-#define LEAF_LED_STATE_OFF           1       /* Giá trị TẮT đèn / Dừng Cycle mode (0 = OFF) */
+#define LEAF_LED_STATE_OFF           0       /* Giá trị TẮT đèn / Dừng Cycle mode (0 = OFF) */
 #endif
 
 const struct bt_mesh_comp *model_handler_init(void);
